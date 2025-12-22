@@ -211,6 +211,27 @@ uint8_t DHT11_ReadData(DHT11_Data *data) {
 
     return 1;  // 성공
 }
+// 모터 방향 및 속도 제어 함수
+// speed: 0 ~ 1000 (Counter Period 값에 대응)
+// direction: 0(정지), 1(정회전), 2(역회전)
+void Control_Motor(uint32_t direction, uint32_t speed) {
+    // 1. 속도 설정 (PWM Duty Cycle 업데이트)
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, speed);
+
+    // 2. 방향 설정
+    if (direction == 1) { // 정회전
+        HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, GPIO_PIN_RESET);
+    }
+    else if (direction == 2) { // 역회전
+        HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, GPIO_PIN_SET);
+    }
+    else { // 정지
+        HAL_GPIO_WritePin(GPIOE, GPIO_PIN_2, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOE, GPIO_PIN_4, GPIO_PIN_RESET);
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -248,6 +269,7 @@ int main(void)
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -625,7 +647,17 @@ void StartDefaultTask(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(100);
+	  // 정회전, 속도 70% (700/1000)
+	      Control_Motor(1, 700);
+	      osDelay(3000);
+
+	      // 정지
+	      Control_Motor(0, 0);
+	      osDelay(1000);
+
+	      // 역회전, 속도 50% (500/1000)
+	      Control_Motor(2, 500);
+	      osDelay(3000);
   }
   /* USER CODE END 5 */
 }
