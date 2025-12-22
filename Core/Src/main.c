@@ -27,12 +27,19 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct {
+    uint8_t humidity_int;
+    uint8_t humidity_dec;
+    uint8_t temperature_int;
+    uint8_t temperature_dec;
+    uint8_t checksum;
+} DHT11_Data;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define DHT11_PORT GPIOG
+#define DHT11_PIN GPIO_PIN_3
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -41,28 +48,169 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
-osThreadId defaultTaskHandle;
-/* USER CODE BEGIN PV */
+UART_HandleTypeDef huart3;
 
+osThreadId defaultTaskHandle;
+osThreadId temp_humHandle;
+osThreadId brightHandle;
+/* USER CODE BEGIN PV */
+uint32_t adc_val = 0;
+const uint32_t LUX_THRESHOLD = 3000; // 임계값 (0~4095 사이, 환경에 따라 조절)
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_USART3_UART_Init(void);
+static void MX_ADC1_Init(void);
 void StartDefaultTask(void const * argument);
+void StartTask02(void const * argument);
+void StartTask03(void const * argument);
 
 /* USER CODE BEGIN PFP */
-
+void DHT11_SetPinOutput(void);
+void DHT11_SetPinInput(void);
+void DHT11_Start(void);
+uint8_t DHT11_CheckResponse(void);
+uint8_t DHT11_ReadByte(void);
+uint8_t DHT11_ReadData(DHT11_Data *data);
+void delay_us(uint32_t us);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#include "string.h"
+#include <stdarg.h>
+#include <stdio.h>
+//#define printf UART_SendString
+void UART_SendString(char* str) {
+    HAL_UART_Transmit(&huart3, (uint8_t*)str, strlen(str), HAL_MAX_DELAY);
+}
+// 마이크로초 딜레이 함수 (TIM2 사용)
+void delay_us(uint32_t us) {
+    __HAL_TIM_SET_COUNTER(&htim2, 0);
+    while (__HAL_TIM_GET_COUNTER(&htim2) < us);
+}
 
+// GPIO를 출력 모드로 설정
+void DHT11_SetPinOutput(void) {
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = DHT11_PIN;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(DHT11_PORT, &GPIO_InitStruct);
+}
+
+// GPIO를 입력 모드로 설정
+void DHT11_SetPinInput(void) {
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = DHT11_PIN;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(DHT11_PORT, &GPIO_InitStruct);
+}
+
+// DHT11 시작 신호
+void DHT11_Start(void) {
+    DHT11_SetPinOutput();
+    HAL_GPIO_WritePin(DHT11_PORT, DHT11_PIN, GPIO_PIN_RESET);
+    delay_us(18000);  // 18ms Low
+    HAL_GPIO_WritePin(DHT11_PORT, DHT11_PIN, GPIO_PIN_SET);
+    delay_us(30);     // 30us High
+    DHT11_SetPinInput();
+}
+
+// DHT11 응답 확인
+uint8_t DHT11_CheckResponse(void) {
+    uint8_t response = 0;
+    uint32_t timeout = 0;
+
+    // 80us Low 대기
+    timeout = 0;
+    while (HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN) == GPIO_PIN_RESET) {
+        delay_us(1);
+        timeout++;
+        if (timeout > 100) return 0;
+    }
+
+    // 80us High 대기
+    timeout = 0;
+    while (HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN) == GPIO_PIN_SET) {
+        delay_us(1);
+        timeout++;
+        if (timeout > 100) return 0;
+    }
+
+    return 1;
+}
+
+// DHT11에서 1바이트 읽기
+uint8_t DHT11_ReadByte(void) {
+    uint8_t byte = 0;
+    uint32_t timeout = 0;
+
+    for (int i = 0; i < 8; i++) {
+        // 50us Low 신호 대기
+        timeout = 0;
+        while (HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN) == GPIO_PIN_RESET) {
+            delay_us(1);
+            timeout++;
+            if (timeout > 100) return 0;
+        }
+
+        // High 신호 길이로 0/1 판단
+        delay_us(40);
+
+        if (HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN) == GPIO_PIN_SET) {
+            byte |= (1 << (7 - i));  // 1
+        }
+
+        // High 신호 끝날 때까지 대기
+        timeout = 0;
+        while (HAL_GPIO_ReadPin(DHT11_PORT, DHT11_PIN) == GPIO_PIN_SET) {
+            delay_us(1);
+            timeout++;
+            if (timeout > 100) break;
+        }
+    }
+
+    return byte;
+}
+
+// DHT11 데이터 읽기
+uint8_t DHT11_ReadData(DHT11_Data *data) {
+    uint8_t checksum;
+
+    DHT11_Start();
+
+    if (!DHT11_CheckResponse()) {
+        return 0;  // 응답 없음
+    }
+
+    data->humidity_int = DHT11_ReadByte();
+    data->humidity_dec = DHT11_ReadByte();
+    data->temperature_int = DHT11_ReadByte();
+    data->temperature_dec = DHT11_ReadByte();
+    data->checksum = DHT11_ReadByte();
+
+    // 체크섬 검증
+    checksum = data->humidity_int + data->humidity_dec +
+               data->temperature_int + data->temperature_dec;
+
+    if (checksum != data->checksum) {
+        return 0;  // 체크섬 오류
+    }
+
+    return 1;  // 성공
+}
 /* USER CODE END 0 */
 
 /**
@@ -94,10 +242,12 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_TIM2_Init();
   MX_TIM3_Init();
+  MX_TIM2_Init();
+  MX_USART3_UART_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_TIM_Base_Start(&htim2);
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -120,6 +270,14 @@ int main(void)
   /* definition and creation of defaultTask */
   osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+
+  /* definition and creation of temp_hum */
+  osThreadDef(temp_hum, StartTask02, osPriorityNormal, 0, 512);
+  temp_humHandle = osThreadCreate(osThread(temp_hum), NULL);
+
+  /* definition and creation of bright */
+  osThreadDef(bright, StartTask03, osPriorityIdle, 0, 512);
+  brightHandle = osThreadCreate(osThread(bright), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -188,6 +346,58 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_3;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
   * @brief TIM2 Initialization Function
   * @param None
   * @retval None
@@ -199,19 +409,24 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 0 */
 
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM2_Init 1 */
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 84-1;
+  htim2.Init.Prescaler = 42-1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 1000-1;
+  htim2.Init.Period = 0xffff;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
   {
     Error_Handler();
   }
@@ -221,22 +436,9 @@ static void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE BEGIN TIM2_Init 2 */
 
   /* USER CODE END TIM2_Init 2 */
-  HAL_TIM_MspPostInit(&htim2);
 
 }
 
@@ -252,6 +454,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 0 */
 
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
@@ -261,9 +464,18 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 84-1;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 20000-1;
+  htim3.Init.Period = 1000-1;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
     Error_Handler();
@@ -282,10 +494,47 @@ static void MX_TIM3_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN TIM3_Init 2 */
 
   /* USER CODE END TIM3_Init 2 */
   HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
+  * @brief USART3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART3_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART3_Init 0 */
+
+  /* USER CODE END USART3_Init 0 */
+
+  /* USER CODE BEGIN USART3_Init 1 */
+
+  /* USER CODE END USART3_Init 1 */
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 115200;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART3_Init 2 */
+
+  /* USER CODE END USART3_Init 2 */
 
 }
 
@@ -296,12 +545,63 @@ static void MX_TIM3_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOF_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOG_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_9, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2|GPIO_PIN_3, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : PF13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PE9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PD14 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PD15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PG2 PG3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -325,9 +625,113 @@ void StartDefaultTask(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    osDelay(100);
   }
   /* USER CODE END 5 */
+}
+
+/* USER CODE BEGIN Header_StartTask02 */
+/**
+* @brief Function implementing the temp_hum thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTask02 */
+void StartTask02(void const * argument)
+{
+  /* USER CODE BEGIN StartTask02 */
+	DHT11_Data dht11_data;
+	    char buf[128];
+	    uint8_t retry_count = 0;
+	    uint32_t read_count = 0;
+
+	    UART_SendString("\r\n========================================\r\n");
+	    UART_SendString("   DHT11 Temperature & Humidity Sensor\r\n");
+	    UART_SendString("========================================\r\n");
+	    UART_SendString("Initializing sensor...\r\n\r\n");
+
+	    // 센서 안정화를 위한 초기 대기
+	    osDelay(2000);
+
+	    for(;;)
+	    {
+	        read_count++;
+
+	        if (DHT11_ReadData(&dht11_data)) {
+	            // 데이터 읽기 성공
+	            sprintf(buf, "[%lu] Temperature: %d.%d°C | Humidity: %d.%d%% | Status: OK\r\n",
+	                    read_count,
+	                    dht11_data.temperature_int,
+	                    dht11_data.temperature_dec,
+	                    dht11_data.humidity_int,
+	                    dht11_data.humidity_dec);
+	            UART_SendString(buf);
+	            retry_count = 0;
+	        } else {
+	            // 데이터 읽기 실패
+	            retry_count++;
+	            sprintf(buf, "[%lu] Read failed! (Retry: %d/5)\r\n",
+	                    read_count, retry_count);
+	            UART_SendString(buf);
+
+	            if (retry_count >= 5) {
+	                UART_SendString("WARNING: Multiple read failures. Check sensor connection.\r\n");
+	                retry_count = 0;
+	            }
+	        }
+
+	        // 3초 대기
+	        osDelay(3000);
+	    }
+  /* USER CODE END StartTask02 */
+}
+
+/* USER CODE BEGIN Header_StartTask03 */
+/**
+* @brief Function implementing the bright thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTask03 */
+void StartTask03(void const * argument)
+{
+  /* USER CODE BEGIN StartTask03 */
+	char buf[64];
+	UART_SendString("Light Sensor Control System Start...\r\n");
+
+  /* Infinite loop */
+	  for(;;)
+	  {
+	    // 1. ADC 시작
+	    HAL_ADC_Start(&hadc1); // hadc1은 설정에 따라 이름이 다를 수 있음
+
+	    // 2. 변환 완료 대기 (타임아웃 10ms)
+	    if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
+	    {
+	      // 3. ADC 값 읽기 (12비트 기준 0 ~ 4095)
+	      adc_val = HAL_ADC_GetValue(&hadc1);
+
+	      // 4. UART 출력
+	      sprintf(buf, "Current Light Value: %lu\r\n", adc_val);
+	      UART_SendString(buf);
+
+	      // 5. 임계값 비교 및 LED 제어 (어두우면 켜짐)
+	      // SEN030201은 보통 밝을수록 전압(ADC값)이 높아집니다.
+	      if (adc_val < LUX_THRESHOLD) {
+	        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_SET);   // LED ON
+	        UART_SendString("Status: DARK -> LED ON\r\n");
+	      } else {
+	        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_RESET); // LED OFF
+	        UART_SendString("Status: BRIGHT -> LED OFF\r\n");
+	      }
+	    }
+
+	    HAL_ADC_Stop(&hadc1); // ADC 중지
+
+	    // 6. 5초 대기
+	    osDelay(5000);
+	  }
+  /* USER CODE END StartTask03 */
 }
 
 /**
