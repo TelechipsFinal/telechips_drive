@@ -16,8 +16,8 @@
 *.settings/
 
 # Eclipse specific files
-.project
-.cproject
+# .project
+# .cproject
 .metadata/
 
 # Other temporary or generated files
