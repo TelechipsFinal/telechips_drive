@@ -50,6 +50,8 @@ typedef struct {
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
 
+CAN_HandleTypeDef hcan1;
+
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
@@ -61,6 +63,11 @@ osThreadId brightHandle;
 /* USER CODE BEGIN PV */
 uint32_t adc_val = 0;
 const uint32_t LUX_THRESHOLD = 3000; // 임계값 (0~4095 사이, 환경에 따라 조절)
+
+static volatile uint8_t g_led_mode = 0; // 전방 라이드 on/off
+static volatile uint8_t g_speed_ctrl_enabled = 0; // 시작/정지 상태
+static volatile uint8_t g_bump_detected = 0; // 감속/가속 트리거 (이벤트)
+static volatile uint8_t g_decel_mode = 1;// 자동 감속 기능 on/off
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -70,6 +77,7 @@ static void MX_TIM3_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_CAN1_Init(void);
 void StartDefaultTask(void const * argument);
 void StartTask02(void const * argument);
 void StartTask03(void const * argument);
@@ -82,6 +90,9 @@ uint8_t DHT11_CheckResponse(void);
 uint8_t DHT11_ReadByte(void);
 uint8_t DHT11_ReadData(DHT11_Data *data);
 void delay_us(uint32_t us);
+
+void CAN_App_Init(void);
+HAL_StatusTypeDef CAN_Send_SensorFrame(const DHT11_Data *dht, uint16_t adc);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -274,7 +285,9 @@ int main(void)
   MX_TIM2_Init();
   MX_USART3_UART_Init();
   MX_ADC1_Init();
+  MX_CAN1_Init();
   /* USER CODE BEGIN 2 */
+  CAN_App_Init();
   HAL_TIM_Base_Start(&htim2);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   /* USER CODE END 2 */
@@ -365,7 +378,7 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
@@ -423,6 +436,43 @@ static void MX_ADC1_Init(void)
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
+  * @brief CAN1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_CAN1_Init(void)
+{
+
+  /* USER CODE BEGIN CAN1_Init 0 */
+
+  /* USER CODE END CAN1_Init 0 */
+
+  /* USER CODE BEGIN CAN1_Init 1 */
+
+  /* USER CODE END CAN1_Init 1 */
+  hcan1.Instance = CAN1;
+  hcan1.Init.Prescaler = 7;
+  hcan1.Init.Mode = CAN_MODE_NORMAL;
+  hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
+  hcan1.Init.TimeSeg1 = CAN_BS1_8TQ;
+  hcan1.Init.TimeSeg2 = CAN_BS2_3TQ;
+  hcan1.Init.TimeTriggeredMode = DISABLE;
+  hcan1.Init.AutoBusOff = DISABLE;
+  hcan1.Init.AutoWakeUp = DISABLE;
+  hcan1.Init.AutoRetransmission = ENABLE; // 초기통합에선 enable
+  hcan1.Init.ReceiveFifoLocked = DISABLE;
+  hcan1.Init.TransmitFifoPriority = DISABLE;
+  if (HAL_CAN_Init(&hcan1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN CAN1_Init 2 */
+
+  /* USER CODE END CAN1_Init 2 */
 
 }
 
@@ -638,7 +688,79 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void CAN_App_Init(void)
+{
+  CAN_FilterTypeDef filter = {0};
 
+// 0x20, 0x21만 통과시키는 마스크 필터
+// 0x20(0010 0000), 0x21(0010 0001) -> LSB만 다름
+// mask에서 LSB 비교 제외: 0x7FE
+  filter.FilterBank =0;
+  filter.FilterMode = CAN_FILTERMODE_IDMASK;
+  filter.FilterScale = CAN_FILTERSCALE_32BIT;
+  filter.FilterFIFOAssignment = CAN_FILTER_FIFO0;
+  filter.FilterActivation = ENABLE;
+
+  // 0x20~0x23 통과(하위 2비트 무시) → 0x20,0x21,0x22 모두 수신됨
+  filter.FilterIdHigh     = (0x20 << 5);
+  filter.FilterIdLow      = 0x0000;
+  filter.FilterMaskIdHigh = (0x7FC << 5);
+  filter.FilterMaskIdLow  = 0x0000;
+
+if (HAL_CAN_ConfigFilter(&hcan1, &filter) != HAL_OK) Error_Handler();
+if (HAL_CAN_Start(&hcan1) != HAL_OK) Error_Handler();
+if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK) Error_Handler();
+}
+
+HAL_StatusTypeDef CAN_Send_SensorFrame(const DHT11_Data *dht,uint16_t adc)
+{
+  CAN_TxHeaderTypeDef txHeader = {0};
+uint8_t data[3];
+uint32_t txMailbox;
+
+  txHeader.StdId =0x30;
+  txHeader.IDE   = CAN_ID_STD;
+  txHeader.RTR   = CAN_RTR_DATA;
+  txHeader.DLC   =3;
+
+  data[0] = dht->temperature_int;
+  data[1] = (uint8_t)((adc >>8) &0xFF);
+  data[2] = (uint8_t)(adc &0xFF);
+
+  // Tx mailbox 3개 중 사용 가능한 게 없으면(0이면) 지금은 보내지 않음
+  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) == 0) {
+      return HAL_BUSY;  // 호출한 쪽(StartTask02)에서 "CAN TX FAIL"로 처리 가능
+  }
+
+  return HAL_CAN_AddTxMessage(&hcan1, &txHeader, data, &txMailbox);
+}
+
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+  CAN_RxHeaderTypeDef rxHeader;
+uint8_t rxData[8];
+
+if (hcan->Instance != CAN1) return;
+if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)return;
+if (rxHeader.IDE != CAN_ID_STD)return;
+if (rxHeader.DLC < 1) return;
+
+if (rxHeader.StdId == 0x20) {
+    // 0x20: 감속/가속 이벤트
+    // rxData[0] = 0(ACCEL: 원속 복귀), 1(DECEL: 감속)
+    if (rxData[0] <= 1) g_bump_detected = rxData[0];
+
+  } else if (rxHeader.StdId == 0x21) {
+    // 0x21: 시작/정지
+    // rxData[0] = 0(STOP), 1(START)
+    g_speed_ctrl_enabled = (rxData[0] == 1) ? 1 : 0;
+
+  } else if (rxHeader.StdId == 0x22) {
+    // 0x22: 자동 감속/가속 기능 ON/OFF
+    // rxData[0] = 0(AUTO_OFF), 1(AUTO_ON)
+    if (rxData[0] <= 1) g_decel_mode = rxData[0];
+  }
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -654,17 +776,29 @@ void StartDefaultTask(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-	  // 정회전, 속도 70% (700/1000)
-	      Control_Motor(1, 300);
-	      osDelay(3000);
 
-	      // 정지
-	      Control_Motor(0, 0);
-	      osDelay(1000);
+	  // 1) 시작/정지 (0x21) 가 최우선
+	      if (!g_speed_ctrl_enabled) {
+	        Control_Motor(0, 0);
+	        osDelay(10);
+	        continue;
+	      }
 
-//	      // 역회전, 속도 50% (500/1000)
-//	      Control_Motor(2, 500);
-//	      osDelay(3000);
+	      // 2) 주행 중일 때: AUTO_OFF면 항상 정상 속도
+	      if (g_decel_mode == 0) {
+	        Control_Motor(1, 700);
+	        osDelay(10);
+	        continue;
+	      }
+
+	      // 3) AUTO_ON이면: 0x20 이벤트(DECEL/ACCEL)에 따라 속도 전환
+	      if (g_bump_detected) {
+	        Control_Motor(1, 500);   // 감속
+	      } else {
+	        Control_Motor(1, 700);  // 원속 복귀(가속)
+	      }
+
+	      osDelay(10);
   }
   /* USER CODE END 5 */
 }
@@ -705,7 +839,15 @@ void StartTask02(void const * argument)
 	                    dht11_data.humidity_int,
 	                    dht11_data.humidity_dec);
 	            UART_SendString(buf);
-	            retry_count = 0;
+	            //retry_count = 0;
+	            if (CAN_Send_SensorFrame(&dht11_data, (uint16_t)adc_val) != HAL_OK) {
+	                UART_SendString("CAN TX FAIL\r\n");
+	            // 필요하면 LED 토글 = send
+	                HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
+	              }
+
+	              retry_count =0;
+
 	        } else {
 	            // 데이터 읽기 실패
 	            retry_count++;
@@ -756,13 +898,23 @@ void StartTask03(void const * argument)
 
 	      // 5. 임계값 비교 및 LED 제어 (어두우면 켜짐)
 	      // SEN030201은 보통 밝을수록 전압(ADC값)이 높아집니다.
-	      if (adc_val < LUX_THRESHOLD) {
-	        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_SET);   // LED ON
-	        UART_SendString("Status: DARK -> LED ON\r\n");
-	      } else {
-	        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_RESET); // LED OFF
-	        UART_SendString("Status: BRIGHT -> LED OFF\r\n");
+	      if (g_led_mode ==0) {
+	          HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_RESET);
+	          UART_SendString("LED Mode: FORCE_OFF\r\n");
+	      }else if (g_led_mode ==1) {
+	          HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_SET);
+	          UART_SendString("LED Mode: FORCE_ON\r\n");
 	      }
+	      else {
+	    	  if (adc_val < LUX_THRESHOLD) {
+	    		  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_SET);   // LED ON
+	    		  UART_SendString("Status: DARK -> LED ON\r\n");
+	    	  } else {
+	    		  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_RESET); // LED OFF
+	    		  UART_SendString("Status: BRIGHT -> LED OFF\r\n");
+	    	  }
+	      }
+
 	    }
 
 	    HAL_ADC_Stop(&hadc1); // ADC 중지
