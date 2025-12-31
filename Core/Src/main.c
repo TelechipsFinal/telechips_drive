@@ -904,6 +904,7 @@ void StartTask03(void const * argument)
 	    	  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_RESET); // LED OFF
 	    	  UART_SendString("Status: BRIGHT -> LED OFF\r\n");
 	      }
+
 	    }
 
 	    HAL_ADC_Stop(&hadc1); // ADC 중지
