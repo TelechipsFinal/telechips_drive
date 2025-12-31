@@ -64,7 +64,6 @@ osThreadId brightHandle;
 uint32_t adc_val = 0;
 const uint32_t LUX_THRESHOLD = 3000; // 임계값 (0~4095 사이, 환경에 따라 조절)
 
-static volatile uint8_t g_led_mode = 0; // 전방 라이드 on/off
 static volatile uint8_t g_speed_ctrl_enabled = 0; // 시작/정지 상태
 static volatile uint8_t g_bump_detected = 0; // 감속/가속 트리거 (이벤트)
 static volatile uint8_t g_decel_mode = 1;// 자동 감속 기능 on/off
@@ -898,21 +897,12 @@ void StartTask03(void const * argument)
 
 	      // 5. 임계값 비교 및 LED 제어 (어두우면 켜짐)
 	      // SEN030201은 보통 밝을수록 전압(ADC값)이 높아집니다.
-	      if (g_led_mode ==0) {
-	          HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_RESET);
-	          UART_SendString("LED Mode: FORCE_OFF\r\n");
-	      }else if (g_led_mode ==1) {
-	          HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_SET);
-	          UART_SendString("LED Mode: FORCE_ON\r\n");
-	      }
-	      else {
-	    	  if (adc_val < LUX_THRESHOLD) {
-	    		  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_SET);   // LED ON
-	    		  UART_SendString("Status: DARK -> LED ON\r\n");
-	    	  } else {
-	    		  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_RESET); // LED OFF
-	    		  UART_SendString("Status: BRIGHT -> LED OFF\r\n");
-	    	  }
+	      if (adc_val < LUX_THRESHOLD) {
+	    	  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_SET);   // LED ON
+	    	  UART_SendString("Status: DARK -> LED ON\r\n");
+	      } else {
+	    	  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_2, GPIO_PIN_RESET); // LED OFF
+	    	  UART_SendString("Status: BRIGHT -> LED OFF\r\n");
 	      }
 
 	    }
