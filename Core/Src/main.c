@@ -67,6 +67,20 @@ const uint32_t LUX_THRESHOLD = 3000; // 임계값 (0~4095 사이, 환경에 따�
 static volatile uint8_t g_speed_ctrl_enabled = 0; // 시작/정지 상태
 static volatile uint8_t g_bump_detected = 0; // 감속/가속 트리거 (이벤트)
 static volatile uint8_t g_decel_mode = 1;// 자동 감속 기능 on/off
+
+typedef enum {
+  SPEED_NORMAL = 0,
+  SPEED_DECEL  = 1,
+} SpeedState;
+
+static SpeedState speed_state = SPEED_NORMAL;
+static uint32_t decel_start_tick = 0;
+
+// 튜닝 값(처음은 보수적으로)
+#define PWM_NORMAL   600   // 700
+#define PWM_DECEL    300   // 500
+#define DECEL_TMIN_MS 700   // 감속 유지 최소시간 (0.7s)
+#define DECEL_TMAX_MS 2500  // 감속 최대시간 (2.5s) - 안전장치(선택)
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -691,9 +705,6 @@ void CAN_App_Init(void)
 {
   CAN_FilterTypeDef filter = {0};
 
-// 0x20, 0x21만 통과시키는 마스크 필터
-// 0x20(0010 0000), 0x21(0010 0001) -> LSB만 다름
-// mask에서 LSB 비교 제외: 0x7FE
   filter.FilterBank =0;
   filter.FilterMode = CAN_FILTERMODE_IDMASK;
   filter.FilterScale = CAN_FILTERSCALE_32BIT;
@@ -752,7 +763,7 @@ if (rxHeader.StdId == 0x20) {
   } else if (rxHeader.StdId == 0x21) {
     // 0x21: 시작/정지
     // rxData[0] = 0(STOP), 1(START)
-    g_speed_ctrl_enabled = (rxData[0] == 1) ? 1 : 0;
+	if (rxData[0] <= 1) g_speed_ctrl_enabled = rxData[0];
 
   } else if (rxHeader.StdId == 0x22) {
     // 0x22: 자동 감속/가속 기능 ON/OFF
@@ -773,32 +784,44 @@ void StartDefaultTask(void const * argument)
 {
   /* USER CODE BEGIN 5 */
   /* Infinite loop */
-  for(;;)
-  {
+	for(;;)
+	  {
+		// ISR에서 volatile로 갱신되니 스냅샷 떠서 사용
+	    uint8_t run_en   = g_speed_ctrl_enabled;
+	    uint8_t auto_on  = g_decel_mode;
+	    uint8_t bump_cmd = g_bump_detected;   // 0: ACCEL, 1: DECEL (0x20) :contentReference[oaicite:2]{index=2}
 
-	  // 1) 시작/정지 (0x21) 가 최우선
-	      if (!g_speed_ctrl_enabled) {
-	        Control_Motor(0, 0);
-	        osDelay(10);
-	        continue;
-	      }
+	    uint32_t now = HAL_GetTick();
 
-	      // 2) 주행 중일 때: AUTO_OFF면 항상 정상 속도
-	      if (g_decel_mode == 0) {
-	        Control_Motor(1, 700);
-	        osDelay(10);
-	        continue;
-	      }
-
-	      // 3) AUTO_ON이면: 0x20 이벤트(DECEL/ACCEL)에 따라 속도 전환
-	      if (g_bump_detected) {
-	        Control_Motor(1, 500);   // 감속
-	      } else {
-	        Control_Motor(1, 700);  // 원속 복귀(가속)
-	      }
-
+	    // 1) 시작/정지 최우선
+	    if (!run_en) {
+	    	UART_SendString("start\r\n");
+	      speed_state = SPEED_NORMAL;   // 정지하면 상태도 리셋
+	      Control_Motor(0, 0);
 	      osDelay(10);
-  }
+	      continue;
+	    }
+
+	    // 2) AUTO_OFF면 항상 정상속도 + 상태 리셋
+	    if (!auto_on) {
+	    	UART_SendString("auto_off\r\n");
+	      speed_state = SPEED_NORMAL;
+	      Control_Motor(1, PWM_NORMAL);
+	      osDelay(10);
+	      continue;
+	    }
+
+	    // 3) AUTO_ON, 상태에 따른 모터 출력
+	    if (bump_cmd) {
+	    	UART_SendString("deceleration on\r\n");
+	      Control_Motor(1, PWM_DECEL);
+	    } else {
+	    	UART_SendString("deceleration off, normal\r\n");
+	      Control_Motor(1, PWM_NORMAL);
+	    }
+
+	    osDelay(10);
+	  }
   /* USER CODE END 5 */
 }
 
@@ -838,18 +861,21 @@ void StartTask02(void const * argument)
 	                    dht11_data.humidity_int,
 	                    dht11_data.humidity_dec);
 	            UART_SendString(buf);
-	            //retry_count = 0;
-	            if (CAN_Send_SensorFrame(&dht11_data, (uint16_t)adc_val) != HAL_OK) {
-	                UART_SendString("CAN TX FAIL\r\n");
-	            // 필요하면 LED 토글 = send
-	                HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
-	              }
-
-	              retry_count =0;
+	            // CAN 송신
+	            CAN_Send_SensorFrame(&dht11_data, (uint16_t)adc_val);
+	            retry_count = 0;
 
 	        } else {
 	            // 데이터 읽기 실패
 	            retry_count++;
+
+	            dht11_data.temperature_int = 0xFF;  // 온도 invalid 표시(수신측에서 0xFF면 무시)
+
+	            if (CAN_Send_SensorFrame(&dht11_data, (uint16_t)adc_val) != HAL_OK) {
+	                UART_SendString("CAN TX FAIL (DHT dummy)\r\n");
+	                HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
+	            }
+
 	            sprintf(buf, "[%lu] Read failed! (Retry: %d/5)\r\n",
 	                    read_count, retry_count);
 	            UART_SendString(buf);
@@ -858,6 +884,8 @@ void StartTask02(void const * argument)
 	                UART_SendString("WARNING: Multiple read failures. Check sensor connection.\r\n");
 	                retry_count = 0;
 	            }
+	            // dummy 값과 함께 CAN 송신
+	            CAN_Send_SensorFrame(&dht11_data, (uint16_t)adc_val);
 	        }
 
 	        // 3초 대기
