@@ -795,7 +795,7 @@ void StartDefaultTask(void const * argument)
 
 	    // 1) 시작/정지 최우선
 	    if (!run_en) {
-	    	UART_SendString("start\r\n");
+	    	UART_SendString("stop\r\n");
 	      speed_state = SPEED_NORMAL;   // 정지하면 상태도 리셋
 	      Control_Motor(0, 0);
 	      osDelay(10);

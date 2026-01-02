@@ -37,17 +37,17 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   CONTENTS, READONLY, DEBUGGING, OCTETS
  16 .debug_rnglists 00000f76  00000000  00000000  00026b40  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 17 .debug_macro  000279a7  00000000  00000000  00027ab6  2**0
+ 17 .debug_macro  000279d6  00000000  00000000  00027ab6  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 18 .debug_line   00015894  00000000  00000000  0004f45d  2**0
+ 18 .debug_line   00015894  00000000  00000000  0004f48c  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 19 .debug_str    000f3c70  00000000  00000000  00064cf1  2**0
+ 19 .debug_str    000f3c70  00000000  00000000  00064d20  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 20 .comment      00000043  00000000  00000000  00158961  2**0
+ 20 .comment      00000043  00000000  00000000  00158990  2**0
                   CONTENTS, READONLY
- 21 .debug_frame  00006908  00000000  00000000  001589a4  2**2
+ 21 .debug_frame  00006908  00000000  00000000  001589d4  2**2
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 22 .debug_line_str 00000054  00000000  00000000  0015f2ac  2**0
+ 22 .debug_line_str 00000054  00000000  00000000  0015f2dc  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
 
 Disassembly of section .text:
@@ -3276,7 +3276,7 @@ void StartDefaultTask(void const * argument)
  8001bb8:	7bfb      	ldrb	r3, [r7, #15]
  8001bba:	2b00      	cmp	r3, #0
  8001bbc:	d10d      	bne.n	8001bda <StartDefaultTask+0x42>
-	    	UART_SendString("start\r\n");
+	    	UART_SendString("stop\r\n");
  8001bbe:	481f      	ldr	r0, [pc, #124]	@ (8001c3c <StartDefaultTask+0xa4>)
  8001bc0:	f7ff fa58 	bl	8001074 <UART_SendString>
 	      speed_state = SPEED_NORMAL;   // 정지하면 상태도 리셋
