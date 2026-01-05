@@ -391,7 +391,7 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
@@ -441,7 +441,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_3;
   sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  sConfig.SamplingTime = ADC_SAMPLETIME_480CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -471,12 +471,12 @@ static void MX_CAN1_Init(void)
   hcan1.Init.Prescaler = 7;
   hcan1.Init.Mode = CAN_MODE_NORMAL;
   hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
-  hcan1.Init.TimeSeg1 = CAN_BS1_8TQ;
+  hcan1.Init.TimeSeg1 = CAN_BS1_2TQ;
   hcan1.Init.TimeSeg2 = CAN_BS2_3TQ;
   hcan1.Init.TimeTriggeredMode = DISABLE;
   hcan1.Init.AutoBusOff = DISABLE;
   hcan1.Init.AutoWakeUp = DISABLE;
-  hcan1.Init.AutoRetransmission = ENABLE; // 초기통합에선 enable
+  hcan1.Init.AutoRetransmission = DISABLE;
   hcan1.Init.ReceiveFifoLocked = DISABLE;
   hcan1.Init.TransmitFifoPriority = DISABLE;
   if (HAL_CAN_Init(&hcan1) != HAL_OK)
@@ -794,33 +794,35 @@ void StartDefaultTask(void const * argument)
 	    uint32_t now = HAL_GetTick();
 
 	    // 1) 시작/정지 최우선
-	    if (!run_en) {
-	    	UART_SendString("stop\r\n");
-	      speed_state = SPEED_NORMAL;   // 정지하면 상태도 리셋
-	      Control_Motor(0, 0);
-	      osDelay(10);
-	      continue;
-	    }
+//	    if (!run_en) {
+//	    	UART_SendString("stop\r\n");
+//	      speed_state = SPEED_NORMAL;   // 정지하면 상태도 리셋
+//	      Control_Motor(0, 0);
+//	      osDelay(10);
+//	      continue;
+//	    }
 
 	    // 2) AUTO_OFF면 항상 정상속도 + 상태 리셋
-	    if (!auto_on) {
-	    	UART_SendString("auto_off\r\n");
-	      speed_state = SPEED_NORMAL;
-	      Control_Motor(1, PWM_NORMAL);
-	      osDelay(10);
-	      continue;
-	    }
+//	    if (!auto_on) {
+//	    	UART_SendString("auto_off\r\n");
+//	      speed_state = SPEED_NORMAL;
+//	      Control_Motor(1, PWM_NORMAL);
+//	      osDelay(10);
+//	      continue;
+//	    }
 
 	    // 3) AUTO_ON, 상태에 따른 모터 출력
-	    if (bump_cmd) {
-	    	UART_SendString("deceleration on\r\n");
-	      Control_Motor(1, PWM_DECEL);
-	    } else {
-	    	UART_SendString("deceleration off, normal\r\n");
-	      Control_Motor(1, PWM_NORMAL);
-	    }
-
-	    osDelay(10);
+//	    if (bump_cmd) {
+//	    	UART_SendString("deceleration on\r\n");
+//	      Control_Motor(1, PWM_DECEL);
+//	    } else {
+//	    	UART_SendString("deceleration off, normal\r\n");
+//	      Control_Motor(1, PWM_NORMAL);
+//	    }
+//
+//	    osDelay(10);
+	    Control_Motor(1, 200);
+	    osDelay(300);
 	  }
   /* USER CODE END 5 */
 }

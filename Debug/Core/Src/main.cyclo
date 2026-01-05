@@ -18,7 +18,7 @@
 ../Core/Src/main.c:704:6:CAN_App_Init	4
 ../Core/Src/main.c:725:19:CAN_Send_SensorFrame	2
 ../Core/Src/main.c:748:6:HAL_CAN_RxFifo0MsgPendingCallback	11
-../Core/Src/main.c:783:6:StartDefaultTask	4
-../Core/Src/main.c:835:6:StartTask02	4
-../Core/Src/main.c:904:6:StartTask03	3
-../Core/Src/main.c:950:6:Error_Handler	1
+../Core/Src/main.c:783:6:StartDefaultTask	1
+../Core/Src/main.c:837:6:StartTask02	4
+../Core/Src/main.c:906:6:StartTask03	3
+../Core/Src/main.c:952:6:Error_Handler	1
